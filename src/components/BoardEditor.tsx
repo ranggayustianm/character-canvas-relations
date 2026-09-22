@@ -1,10 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { ReactFlowProvider, useReactFlow } from "@xyflow/react";
 import { useBoardStore } from "@/lib/store";
 import { exportBoardToPng } from "@/lib/export";
+import { useHydrated } from "@/lib/useHydrated";
 import type { CharacterNodeData } from "@/lib/types";
 import { Canvas } from "./Canvas";
 import { EdgeEditor } from "./EdgeEditor";
@@ -15,8 +16,7 @@ import { Toolbar } from "./Toolbar";
 export function BoardEditor({ boardId }: { boardId: string }) {
   // Boards load from localStorage, so render on the client only to avoid
   // hydration mismatches.
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => setMounted(true), []);
+  const mounted = useHydrated();
 
   if (!mounted) {
     return <div className="h-dvh w-full animate-pulse bg-zinc-100" aria-label="Loading board" />;
@@ -30,7 +30,11 @@ export function BoardEditor({ boardId }: { boardId: string }) {
 }
 
 function EditorInner({ boardId }: { boardId: string }) {
-  const board = useBoardStore((s) => s.boards[boardId]);
+  // Narrow selectors: this shell must not re-render on every canvas edit,
+  // so it subscribes to existence/name/count only, never the whole board.
+  const boardExists = useBoardStore((s) => Boolean(s.boards[boardId]));
+  const boardName = useBoardStore((s) => s.boards[boardId]?.name ?? "");
+  const nodeCount = useBoardStore((s) => s.boards[boardId]?.nodes.length ?? 0);
   const renameBoard = useBoardStore((s) => s.renameBoard);
   const addCharacterNode = useBoardStore((s) => s.addCharacter);
   const applyNodeChanges = useBoardStore((s) => s.applyNodeChanges);
@@ -49,6 +53,7 @@ function EditorInner({ boardId }: { boardId: string }) {
 
   const addCharacter = useCallback(
     (data: CharacterNodeData, position?: { x: number; y: number }) => {
+      const board = useBoardStore.getState().boards[boardId];
       const existing = board?.nodes.find(
         (n) => n.data.source === data.source && n.data.externalId === data.externalId
       );
@@ -77,10 +82,10 @@ function EditorInner({ boardId }: { boardId: string }) {
       }
       addCharacterNode(boardId, data, pos);
     },
-    [board, boardId, applyNodeChanges, addCharacterNode, notify, screenToFlowPosition, setCenter]
+    [boardId, applyNodeChanges, addCharacterNode, notify, screenToFlowPosition, setCenter]
   );
 
-  if (!board) {
+  if (!boardExists) {
     return (
       <div className="flex h-dvh flex-col items-center justify-center gap-3 bg-zinc-50 text-center">
         <p className="text-lg font-semibold text-zinc-900">Board not found</p>
@@ -101,11 +106,13 @@ function EditorInner({ boardId }: { boardId: string }) {
     <EditorProvider value={{ openEdgeEditor: setEditingEdgeId, addCharacter, notify }}>
       <div className="flex h-dvh flex-col bg-zinc-50">
         <Toolbar
-          boardName={board.name}
+          boardName={boardName}
           onRename={(name) => renameBoard(boardId, name)}
-          exportDisabled={board.nodes.length === 0}
+          exportDisabled={nodeCount === 0}
           onExport={async () => {
             try {
+              const board = useBoardStore.getState().boards[boardId];
+              if (!board) return;
               await exportBoardToPng(board.nodes, board.name);
             } catch {
               notify("Export failed — try again");

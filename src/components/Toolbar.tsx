@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { RELATIONSHIP_LIST } from "@/lib/relationships";
 
 export function Toolbar({
@@ -15,8 +15,15 @@ export function Toolbar({
   onExport: () => void;
   exportDisabled: boolean;
 }) {
+  // Sync local draft when the board name changes externally (rename via
+  // store). Adjusting during render instead of in an effect avoids the
+  // cascading-render pattern (react-hooks/set-state-in-effect).
   const [name, setName] = useState(boardName);
-  useEffect(() => setName(boardName), [boardName]);
+  const [prevBoardName, setPrevBoardName] = useState(boardName);
+  if (prevBoardName !== boardName) {
+    setPrevBoardName(boardName);
+    setName(boardName);
+  }
 
   const [exporting, setExporting] = useState(false);
 

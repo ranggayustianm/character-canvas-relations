@@ -9,7 +9,7 @@ import {
   type NodeChange,
 } from "@xyflow/react";
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
+import { createJSONStorage, persist } from "zustand/middleware";
 import type {
   Board,
   CharacterNode,
@@ -17,6 +17,29 @@ import type {
   RelationshipEdge,
   RelationshipEdgeData,
 } from "./types";
+
+// Wrap localStorage so a QuotaExceededError (or an unavailable/private-mode
+// storage) degrades to a silent in-memory stub instead of throwing inside
+// set() mid-interaction. On the server there is no localStorage at all, so
+// return the stub directly without warning (persist never reads it during SSR).
+const noopStorage = {
+  getItem: () => null,
+  setItem: () => {},
+  removeItem: () => {},
+} as unknown as Storage;
+
+const quotaSafeStorage = createJSONStorage(() => {
+  if (typeof window === "undefined") return noopStorage;
+  try {
+    const probe = "__probe__";
+    localStorage.setItem(probe, probe);
+    localStorage.removeItem(probe);
+    return localStorage;
+  } catch {
+    console.warn("localStorage unavailable — board changes will not persist");
+    return noopStorage;
+  }
+});
 
 const uid = () =>
   typeof crypto !== "undefined" && "randomUUID" in crypto
@@ -39,7 +62,6 @@ type BoardStore = {
   addCharacter: (boardId: string, data: CharacterNodeData, position: { x: number; y: number }) => CharacterNode;
   connectNodes: (boardId: string, connection: Connection) => RelationshipEdge | null;
   updateEdge: (boardId: string, edgeId: string, patch: Partial<RelationshipEdgeData>) => void;
-  touch: (boardId: string) => void;
 };
 
 export const useBoardStore = create<BoardStore>()(
@@ -88,6 +110,9 @@ export const useBoardStore = create<BoardStore>()(
         set((s) => ({ boards: { ...s.boards, [copy.id]: copy } }));
         return copy.id;
       },
+
+      // Transient drag frames are filtered out by Canvas and committed on
+      // drag stop, so `updatedAt` here reflects real edits, not pointer moves.
 
       applyNodeChanges: (boardId, changes) =>
         set((s) => {
@@ -197,16 +222,15 @@ export const useBoardStore = create<BoardStore>()(
             },
           };
         }),
-
-      touch: (boardId) =>
-        set((s) => {
-          const board = s.boards[boardId];
-          if (!board) return s;
-          return {
-            boards: { ...s.boards, [boardId]: { ...board, updatedAt: Date.now() } },
-          };
-        }),
     }),
-    { name: "character-relations-boards" }
+    {
+      name: "character-relations-boards",
+      version: 1,
+      partialize: (s) => ({ boards: s.boards }),
+      // Future shape changes bump `version` and transform old payloads here
+      // instead of breaking rehydration.
+      migrate: (persisted) => persisted as { boards: Record<string, Board> },
+      storage: quotaSafeStorage,
+    }
   )
 );

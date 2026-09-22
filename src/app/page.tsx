@@ -2,8 +2,10 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { useBoardStore } from "@/lib/store";
+import { useHydrated } from "@/lib/useHydrated";
 
 function relativeDate(ts: number) {
   const diff = Date.now() - ts;
@@ -99,15 +101,22 @@ function BoardCard({ boardId }: { boardId: string }) {
 }
 
 export default function HomePage() {
-  const boards = useBoardStore((s) => s.boards);
+  // Shallow-compare the projected id list: edits inside a board (nodes,
+  // edges) only re-render this container when its `updatedAt` changes the
+  // sort order or the id set changes at all. Per-card data is subscribed
+  // inside BoardCard.
+  const boardIds = useBoardStore(
+    useShallow((s) =>
+      Object.values(s.boards)
+        .sort((a, b) => b.updatedAt - a.updatedAt)
+        .map((b) => b.id)
+    )
+  );
   const createBoard = useBoardStore((s) => s.createBoard);
   const router = useRouter();
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => setMounted(true), []);
+  const mounted = useHydrated();
 
-  const list = mounted
-    ? Object.values(boards).sort((a, b) => b.updatedAt - a.updatedAt)
-    : [];
+  const list = mounted ? boardIds : [];
 
   return (
     <main className="min-h-dvh bg-zinc-50">
@@ -149,8 +158,8 @@ export default function HomePage() {
           </div>
         ) : (
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {list.map((board) => (
-              <BoardCard key={board.id} boardId={board.id} />
+            {list.map((boardId) => (
+              <BoardCard key={boardId} boardId={boardId} />
             ))}
           </div>
         )}

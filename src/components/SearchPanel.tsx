@@ -107,23 +107,24 @@ function useDebouncedQuery(initial: string) {
   return { input, setInput, debounced, typing: input.trim() !== debounced };
 }
 
+type SearchResult<T> = {
+  /** Key of the request this result belongs to (mode:query), for derivation. */
+  key: string;
+  kind: "ok" | "error";
+  items?: T[];
+  message?: string;
+};
+
 function JikanSearch() {
   const { input, setInput, debounced, typing } = useDebouncedQuery("");
   const [mode, setMode] = useState<JikanMode>("character");
-  const [characters, setCharacters] = useState<ApiCharacter[] | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<SearchResult<ApiCharacter> | null>(null);
   const requestId = useRef(0);
 
   useEffect(() => {
-    if (!debounced) {
-      setCharacters(null);
-      setError(null);
-      return;
-    }
+    if (!debounced) return;
     const id = ++requestId.current;
-    setLoading(true);
-    setError(null);
+    const key = `${mode}:${debounced}`;
     const param = mode === "character" ? `q=${encodeURIComponent(debounced)}` : `anime=${encodeURIComponent(debounced)}`;
     fetch(`/api/characters/jikan?${param}`)
       .then(async (res) => {
@@ -132,24 +133,35 @@ function JikanSearch() {
         return json as { characters: ApiCharacter[] };
       })
       .then((json) => {
-        if (id === requestId.current) setCharacters(json.characters);
+        if (id === requestId.current)
+          setResult({ key, kind: "ok", items: json.characters });
       })
       .catch((err: Error) => {
-        if (id === requestId.current) {
-          setCharacters(null);
-          setError(
-            err.message.includes("Rate limited")
+        if (id === requestId.current)
+          setResult({
+            key,
+            kind: "error",
+            message: err.message.includes("Rate limited")
               ? "Jikan is rate-limiting us — wait a few seconds and search again."
-              : "Couldn't reach Jikan (it can be slow). Try again in a moment."
-          );
-        }
-      })
-      .finally(() => {
-        if (id === requestId.current) setLoading(false);
+              : "Couldn't reach Jikan (it can be slow). Try again in a moment.",
+          });
       });
   }, [debounced, mode]);
 
-  const busy = loading || typing;
+  // loading/error/results are derived from which request `result` belongs to,
+  // so the effect never needs a synchronous setState at its start.
+  const currentKey = debounced ? `${mode}:${debounced}` : null;
+  const fetching = currentKey !== null && result?.key !== currentKey;
+  const characters =
+    result && result.key === currentKey && result.kind === "ok"
+      ? result.items ?? null
+      : null;
+  const error =
+    result && result.key === currentKey && result.kind === "error"
+      ? result.message ?? null
+      : null;
+
+  const busy = fetching || typing;
 
   return (
     <>
@@ -208,22 +220,16 @@ function JikanSearch() {
 function TvmazeSearch() {
   const { input, setInput, debounced, typing } = useDebouncedQuery("");
   const [view, setView] = useState<TvmazeView>({ phase: "shows" });
-  const [shows, setShows] = useState<ApiShow[] | null>(null);
+  const [showsResult, setShowsResult] = useState<SearchResult<ApiShow> | null>(null);
   const [cast, setCast] = useState<ApiCharacter[] | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [castLoading, setCastLoading] = useState(false);
+  const [castError, setCastError] = useState<string | null>(null);
   const requestId = useRef(0);
 
   useEffect(() => {
-    if (view.phase !== "shows") return;
-    if (!debounced) {
-      setShows(null);
-      setError(null);
-      return;
-    }
+    if (view.phase !== "shows" || !debounced) return;
     const id = ++requestId.current;
-    setLoading(true);
-    setError(null);
+    const key = debounced;
     fetch(`/api/characters/tvmaze?q=${encodeURIComponent(debounced)}`)
       .then(async (res) => {
         const json = await res.json();
@@ -231,25 +237,34 @@ function TvmazeSearch() {
         return json as { shows: ApiShow[] };
       })
       .then((json) => {
-        if (id === requestId.current) setShows(json.shows);
+        if (id === requestId.current)
+          setShowsResult({ key, kind: "ok", items: json.shows });
       })
       .catch(() => {
-        if (id === requestId.current) {
-          setShows(null);
-          setError("Couldn't reach TVmaze. Try again in a moment.");
-        }
-      })
-      .finally(() => {
-        if (id === requestId.current) setLoading(false);
+        if (id === requestId.current)
+          setShowsResult({
+            key,
+            kind: "error",
+            message: "Couldn't reach TVmaze. Try again in a moment.",
+          });
       });
   }, [debounced, view.phase]);
+
+  // Shows-phase loading/error are derived from which query `showsResult`
+  // belongs to, so the effect never needs a synchronous setState.
+  const showsFetching = debounced && showsResult?.key !== debounced;
+  const shows = showsResult?.key === debounced && showsResult.kind === "ok" ? showsResult.items ?? null : null;
+  const showsError = showsResult?.key === debounced && showsResult.kind === "error" ? showsResult.message ?? null : null;
+
+  const loading = view.phase === "cast" ? castLoading : Boolean(showsFetching);
+  const error = view.phase === "cast" ? castError : showsError;
 
   const openCast = (show: ApiShow) => {
     const id = ++requestId.current;
     setView({ phase: "cast", show });
     setCast(null);
-    setError(null);
-    setLoading(true);
+    setCastError(null);
+    setCastLoading(true);
     fetch(`/api/characters/tvmaze?cast=${encodeURIComponent(show.externalId)}`)
       .then(async (res) => {
         const json = await res.json();
@@ -260,10 +275,10 @@ function TvmazeSearch() {
         if (id === requestId.current) setCast(json.characters);
       })
       .catch(() => {
-        if (id === requestId.current) setError("Couldn't load this show's cast.");
+        if (id === requestId.current) setCastError("Couldn't load this show's cast.");
       })
       .finally(() => {
-        if (id === requestId.current) setLoading(false);
+        if (id === requestId.current) setCastLoading(false);
       });
   };
 

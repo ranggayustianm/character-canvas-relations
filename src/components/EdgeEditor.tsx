@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useBoardStore } from "@/lib/store";
 import { RELATIONSHIP_LIST } from "@/lib/relationships";
 import type { RelationshipKind } from "@/lib/types";
@@ -17,11 +17,17 @@ export function EdgeEditor({
   const edge = useBoardStore((s) => s.boards[boardId]?.edges.find((e) => e.id === edgeId));
   const updateEdge = useBoardStore((s) => s.updateEdge);
   const applyEdgeChanges = useBoardStore((s) => s.applyEdgeChanges);
-  const [label, setLabel] = useState(edge?.data?.label ?? "");
+  const externalLabel = edge?.data?.label ?? "";
 
-  useEffect(() => {
-    setLabel(edge?.data?.label ?? "");
-  }, [edgeId, edge?.data?.label]);
+  // Reset the local draft when the persisted label changes externally.
+  // Adjusting during render instead of in an effect avoids the
+  // cascading-render pattern (react-hooks/set-state-in-effect).
+  const [label, setLabel] = useState(externalLabel);
+  const [prevExternalLabel, setPrevExternalLabel] = useState(externalLabel);
+  if (prevExternalLabel !== externalLabel) {
+    setPrevExternalLabel(externalLabel);
+    setLabel(externalLabel);
+  }
 
   if (!edge) return null;
 

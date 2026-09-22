@@ -13,9 +13,11 @@ import {
   type EdgeTypes,
   type NodeChange,
   type NodeTypes,
+  type OnNodeDrag,
   type OnSelectionChangeParams,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
+import { useCallback } from "react";
 import { useBoardStore } from "@/lib/store";
 import type {
   CharacterNode,
@@ -47,10 +49,38 @@ export function Canvas({
   const { openEdgeEditor, addCharacter } = useEditorActions();
   const { screenToFlowPosition } = useReactFlow();
 
-  const handleNodesChange = (changes: NodeChange<CharacterNode>[]) =>
-    applyNodeChanges(boardId, changes);
-  const handleEdgesChange = (changes: EdgeChange<RelationshipEdge>[]) =>
-    applyEdgeChanges(boardId, changes);
+  // Transient drag frames stay out of the store (and out of the localStorage
+  // write): position changes that are still `dragging` are dropped and the
+  // final positions are committed once on drag stop.
+  const handleNodesChange = useCallback(
+    (changes: NodeChange<CharacterNode>[]) => {
+      const committed = changes.filter(
+        (c) => c.type !== "position" || !c.dragging
+      );
+      if (committed.length) applyNodeChanges(boardId, committed);
+    },
+    [applyNodeChanges, boardId]
+  );
+  const handleEdgesChange = useCallback(
+    (changes: EdgeChange<RelationshipEdge>[]) =>
+      applyEdgeChanges(boardId, changes),
+    [applyEdgeChanges, boardId]
+  );
+
+  const handleNodeDragStop = useCallback<OnNodeDrag<CharacterNode>>(
+    (_, __, nodes) => {
+      applyNodeChanges(
+        boardId,
+        nodes.map((n) => ({
+          id: n.id,
+          type: "position" as const,
+          position: n.position,
+          dragging: false,
+        }))
+      );
+    },
+    [applyNodeChanges, boardId]
+  );
 
   const handleConnect = (connection: Connection) => {
     const edge = connectNodes(boardId, connection);
@@ -85,6 +115,7 @@ export function Canvas({
         edgeTypes={edgeTypes}
         onNodesChange={handleNodesChange}
         onEdgesChange={handleEdgesChange}
+        onNodeDragStop={handleNodeDragStop}
         onConnect={handleConnect}
         onEdgeClick={(_, edge) => openEdgeEditor(edge.id)}
         onSelectionChange={onSelectionChange}
